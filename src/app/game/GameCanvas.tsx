@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export default function GameCanvas() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const gameRef = useRef<unknown>(null);
+  const [isLoaded, setIsLoaded] = useState(false);
 
   useEffect(() => {
     if (!containerRef.current || gameRef.current) return;
@@ -18,6 +19,9 @@ export default function GameCanvas() {
       
       const config = createGameConfig(containerRef.current);
       gameRef.current = new Phaser.Game(config);
+      
+      // Hide loading text once game is created
+      setIsLoaded(true);
     })();
 
     return () => {
@@ -31,17 +35,20 @@ export default function GameCanvas() {
   return (
     <div
       ref={containerRef}
-      className="relative aspect-video w-full overflow-hidden rounded-lg border-4 border-[#3a2618] bg-[#1a1a1d] shadow-2xl"
+      className="relative w-full overflow-hidden rounded-lg border-4 border-[#3a2618] bg-[#0a0a0a] shadow-2xl"
       style={{
+        aspectRatio: "2 / 1",
         boxShadow: "0 0 40px rgba(102, 252, 241, 0.15), inset 0 0 60px rgba(0,0,0,0.8)"
       }}
     >
-      <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-        <div className="text-center">
-          <div className="text-lg font-bold text-[#66fcf1] animate-pulse">Loading...</div>
-          <div className="text-xs text-[#c5c6c7]/60 mt-1">Entering Alin&apos;s Basement</div>
+      {!isLoaded && (
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center z-10">
+          <div className="text-center">
+            <div className="text-lg font-bold text-[#66fcf1] animate-pulse">Loading...</div>
+            <div className="text-xs text-[#c5c6c7]/60 mt-1">Entering Alin&apos;s Basement</div>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

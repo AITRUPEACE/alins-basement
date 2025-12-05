@@ -12,13 +12,19 @@ export const createGameConfig = (
   return {
     type: PhaserLib.AUTO,
     parent,
-    backgroundColor: "#1a1a1d",
+    backgroundColor: "#0a0a0a",
     width: 960,
-    height: 540,
+    height: 480,
     pixelArt: true,
+    antialias: false,
+    roundPixels: true,
     scale: {
       mode: PhaserLib.Scale.FIT,
       autoCenter: PhaserLib.Scale.CENTER_BOTH,
+    },
+    render: {
+      pixelArt: true,
+      antialias: false,
     },
     physics: {
       default: "arcade",

@@ -1,15 +1,45 @@
 import * as Phaser from "phaser";
 import { useGameStore } from "@/lib/state/gameStore";
 
-const BASE_SPEED = 180;
+// Debug settings interface (set from React DebugPanel)
+interface DebugSettings {
+  zoom: number;
+  playerScale: number;
+  moveSpeed: number;
+  showCollision: boolean;
+}
+declare global {
+  interface Window {
+    gameDebug?: DebugSettings;
+  }
+}
+
+const BASE_SPEED = 160;
 const SPRINT_MULTIPLIER = 1.5;
 const STAMINA_DRAIN_PER_MS = 0.08;
 const STAMINA_REGEN_PER_MS = 0.04;
 const SANITY_DRAIN_INTERVAL_MS = 1000;
 const SANITY_DRAIN_PER_TICK = 0.5;
-const INTERACT_RADIUS = 72;
+const INTERACT_RADIUS = 60;
 const SERVER_HOLD_MS = 1200;
 const COFFEE_BUFF_MS = 5000;
+
+// Viewport dimensions
+const VIEWPORT_WIDTH = 960;
+const VIEWPORT_HEIGHT = 480;
+
+// Level dimensions (original image size - no scaling for crisp pixels)
+const LEVEL_WIDTH = 2976;
+const LEVEL_HEIGHT = 1440;
+
+type InteractableType = "trash" | "computer" | "server" | "coffee" | "nelly";
+
+interface InteractableObject {
+  sprite: Phaser.GameObjects.Rectangle;
+  type: InteractableType;
+  active: boolean;
+  label?: Phaser.GameObjects.Text;
+}
 
 export class MainScene extends Phaser.Scene {
   private player!: Phaser.Physics.Arcade.Sprite;
@@ -18,67 +48,55 @@ export class MainScene extends Phaser.Scene {
   };
   private sanityTimer = 0;
   private interactKey!: Phaser.Input.Keyboard.Key;
-  private objects: {
-    sprite: Phaser.GameObjects.Rectangle | Phaser.GameObjects.Sprite;
-    type: "trash" | "computer" | "server" | "coffee";
-    active: boolean;
-  }[] = [];
-  private holdTarget: Phaser.GameObjects.Rectangle | Phaser.GameObjects.Sprite | null = null;
+  private objects: InteractableObject[] = [];
+  private holdTarget: Phaser.GameObjects.Rectangle | null = null;
   private holdTimer = 0;
   private speedBuffTimer = 0;
   private lastPhase: string | null = null;
   private interactPrompt!: Phaser.GameObjects.Text;
   private holdProgressBar!: Phaser.GameObjects.Graphics;
+  private levelBg!: Phaser.GameObjects.Image;
+  private walls!: Phaser.Physics.Arcade.StaticGroup;
 
   constructor() {
     super("MainScene");
   }
 
   preload() {
-    // Load player sprite
-    this.load.image("alin", "/assets/alin.png");
+    // Load assets
+    this.load.image("alin", "/assets/alin_sprite_small.jpg");
+    this.load.image("level1", "/assets/gamelevel1.png");
   }
 
   create() {
     const store = useGameStore.getState();
     store.setGameState("menu");
 
-    const { width, height } = this.scale;
+    // Background at 1:1 scale (no scaling = crisp pixels)
+    this.levelBg = this.add.image(LEVEL_WIDTH / 2, LEVEL_HEIGHT / 2, "level1");
+    this.levelBg.setDepth(0);
 
-    // Create basement background
-    this.createBasementBackground();
+    // Set world physics bounds - allow movement across most of the level
+    const boundsMargin = 100;
+    this.physics.world.setBounds(
+      boundsMargin, 
+      boundsMargin, 
+      LEVEL_WIDTH - boundsMargin * 2, 
+      LEVEL_HEIGHT - boundsMargin * 2
+    );
 
-    // Create walls
-    this.createWalls();
+    // Create collision boxes for walls/furniture
+    this.createCollisionBoxes();
 
-    // Check if sprite loaded, otherwise create fallback
-    if (this.textures.exists("alin")) {
-      this.player = this.physics.add
-        .sprite(width / 2, height / 2, "alin")
-        .setScale(2)
-        .setDepth(10);
-    } else {
-      // Fallback: create a placeholder texture
-      const g = this.add.graphics();
-      g.fillStyle(0x3498db, 1);
-      g.fillRect(0, 0, 24, 32);
-      // Head
-      g.fillStyle(0xf1c27d, 1);
-      g.fillRect(4, -8, 16, 12);
-      // Hair
-      g.fillStyle(0x4a3000, 1);
-      g.fillRect(2, -10, 20, 6);
-      g.generateTexture("player-fallback", 24, 32);
-      g.destroy();
+    // Set up camera to follow player and stay within level bounds
+    this.cameras.main.setBounds(0, 0, LEVEL_WIDTH, LEVEL_HEIGHT);
+    this.cameras.main.setZoom(0.5); // Zoom out to see more of the level
 
-      this.player = this.physics.add
-        .sprite(width / 2, height / 2, "player-fallback")
-        .setScale(2)
-        .setDepth(10);
-    }
+    // Create player
+    this.createPlayer();
 
-    this.player.setCollideWorldBounds(true);
-    this.player.body?.setSize(24, 28);
+    // Set up collision between player and walls
+    this.setupPlayerCollision();
 
     // Input setup
     this.cursors = this.input.keyboard?.addKeys({
@@ -88,36 +106,182 @@ export class MainScene extends Phaser.Scene {
       right: Phaser.Input.Keyboard.KeyCodes.D,
       shift: Phaser.Input.Keyboard.KeyCodes.SHIFT,
     }) as typeof this.cursors;
-    
-    this.interactKey = this.input.keyboard!.addKey(
-      Phaser.Input.Keyboard.KeyCodes.E
-    );
+
+    this.interactKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.E);
 
     // Interaction prompt
     this.interactPrompt = this.add
       .text(0, 0, "[E] Interact", {
         fontFamily: "monospace",
-        fontSize: "12px",
+        fontSize: "11px",
         color: "#66fcf1",
-        backgroundColor: "#1a1410",
+        backgroundColor: "#1a1410ee",
         padding: { x: 6, y: 3 },
       })
       .setOrigin(0.5)
-      .setDepth(20)
+      .setDepth(100)
       .setVisible(false);
 
     // Hold progress bar
-    this.holdProgressBar = this.add.graphics().setDepth(21);
+    this.holdProgressBar = this.add.graphics().setDepth(101);
 
-    // Spawn interactive objects
-    this.spawnObjects();
+    // Spawn interactive objects based on level artwork positions
+    this.spawnLevelObjects();
 
     this.lastPhase = store.gameState;
   }
 
+  private createPlayer() {
+    // Start in center of walkable area
+    const startX = LEVEL_WIDTH / 2;
+    const startY = 1100;
+
+    if (this.textures.exists("alin")) {
+      // alin_sprite_small.jpg is 200x285, scale to ~340px tall (4x bigger)
+      this.player = this.physics.add
+        .sprite(startX, startY, "alin")
+        .setScale(1.0)
+        .setDepth(50);
+    } else {
+      // Fallback texture
+      const g = this.add.graphics();
+      g.fillStyle(0x3498db, 1);
+      g.fillRect(0, 0, 24, 32);
+      g.fillStyle(0xf1c27d, 1);
+      g.fillRect(4, 2, 16, 12);
+      g.fillStyle(0x4a3000, 1);
+      g.fillRect(4, 0, 16, 6);
+      g.generateTexture("player-fallback", 24, 32);
+      g.destroy();
+
+      this.player = this.physics.add
+        .sprite(startX, startY, "player-fallback")
+        .setScale(1)
+        .setDepth(50);
+    }
+
+    this.player.setCollideWorldBounds(true);
+    this.player.body?.setSize(300, 400);
+
+    // Camera follows player with smooth lerp
+    this.cameras.main.startFollow(this.player, true, 0.08, 0.08);
+    this.cameras.main.setDeadzone(100, 50); // Small deadzone so camera doesn't jitter
+  }
+
+  private createCollisionBoxes() {
+    // Create static group for walls/furniture collision
+    this.walls = this.physics.add.staticGroup();
+
+    // Define collision boxes based on gamelevel1.png (2976x1440)
+    // Format: { x, y, width, height } - x,y is center of box
+    const collisionBoxes = [
+      // Top wall / server area boundary
+      { x: LEVEL_WIDTH / 2, y: 200, w: LEVEL_WIDTH, h: 400 },
+      
+      // Left wall
+      { x: 50, y: LEVEL_HEIGHT / 2, w: 100, h: LEVEL_HEIGHT },
+      
+      // Right wall  
+      { x: LEVEL_WIDTH - 50, y: LEVEL_HEIGHT / 2, w: 100, h: LEVEL_HEIGHT },
+      
+      // Bottom wall
+      { x: LEVEL_WIDTH / 2, y: LEVEL_HEIGHT - 50, w: LEVEL_WIDTH, h: 100 },
+
+      // Server racks (left side) - approximate positions
+      { x: 400, y: 600, w: 300, h: 200 },
+      { x: 700, y: 600, w: 200, h: 200 },
+      
+      // Desk area (right side)
+      { x: 2400, y: 700, w: 400, h: 250 },
+      
+      // Bathroom area (left)
+      { x: 200, y: 900, w: 300, h: 400 },
+      
+      // Kitchen area (could be right side)
+      // { x: 2600, y: 1000, w: 300, h: 300 },
+    ];
+
+    collisionBoxes.forEach(({ x, y, w, h }) => {
+      // Create invisible collision rectangle
+      const rect = this.add.rectangle(x, y, w, h, 0xff0000, 0); // Invisible (alpha 0)
+      this.physics.add.existing(rect, true); // true = static body
+      this.walls.add(rect);
+      
+      // Debug: show collision boxes (uncomment to visualize)
+      // rect.setStrokeStyle(2, 0xff0000, 0.5);
+    });
+
+    // Add collision between player and walls (will be set up after player is created)
+  }
+
+  private setupPlayerCollision() {
+    if (this.player && this.walls) {
+      this.physics.add.collider(this.player, this.walls);
+    }
+  }
+
+  private spawnLevelObjects() {
+    // Object positions based on gamelevel1.png artwork
+    // Coordinates are approximate based on where things appear in the image
+    const levelObjects: { x: number; y: number; type: InteractableType; w?: number; h?: number }[] = [
+      // Server racks (left side, behind servers in image)
+      { x: 120, y: 310, type: "server", w: 60, h: 40 },
+      { x: 200, y: 310, type: "server", w: 60, h: 40 },
+      
+      // Computer desk (right side with monitors)
+      { x: 780, y: 320, type: "computer", w: 80, h: 50 },
+      
+      // Nelly the dog (on the rug, center)
+      { x: 520, y: 400, type: "nelly", w: 50, h: 40 },
+      
+      // Trash/crates scattered around
+      { x: 150, y: 420, type: "trash", w: 30, h: 30 },
+      { x: 350, y: 380, type: "trash", w: 30, h: 30 },
+      { x: 880, y: 400, type: "trash", w: 30, h: 30 },
+      
+      // Coffee (on desk or lamp table area)
+      { x: 620, y: 390, type: "coffee", w: 25, h: 25 },
+    ];
+
+    levelObjects.forEach(({ x, y, type, w = 40, h = 40 }) => {
+      // Create invisible interaction zone
+      const sprite = this.add
+        .rectangle(x, y, w, h, 0x000000, 0) // Invisible
+        .setDepth(1);
+
+      // Debug: show interaction zones (comment out for production)
+      // sprite.setStrokeStyle(2, 0xff0000, 0.5);
+
+      this.physics.add.existing(sprite, true);
+      this.objects.push({ sprite, type, active: true });
+    });
+  }
+
   update(_: number, delta: number) {
     const store = useGameStore.getState();
-    
+
+    // Apply debug settings from React UI
+    const debug = typeof window !== 'undefined' ? window.gameDebug : undefined;
+    if (debug) {
+      this.cameras.main.setZoom(debug.zoom);
+      if (this.player) {
+        this.player.setScale(debug.playerScale);
+      }
+      // Toggle collision box visibility
+      if (this.walls) {
+        this.walls.getChildren().forEach((child) => {
+          const rect = child as Phaser.GameObjects.Rectangle;
+          if (debug.showCollision) {
+            rect.setStrokeStyle(3, 0xff0000, 0.8);
+            rect.setFillStyle(0xff0000, 0.2);
+          } else {
+            rect.setStrokeStyle(0);
+            rect.setFillStyle(0x000000, 0);
+          }
+        });
+      }
+    }
+
     if (store.gameState !== "playing") {
       if (this.lastPhase === "playing") {
         this.player?.setVelocity(0, 0);
@@ -141,12 +305,13 @@ export class MainScene extends Phaser.Scene {
     const down = this.cursors.down?.isDown;
     const shift = this.cursors.shift?.isDown;
 
-    let speed = BASE_SPEED;
+    // Use debug speed if available, otherwise BASE_SPEED
+    let speed = debug?.moveSpeed ?? BASE_SPEED;
     if (this.speedBuffTimer > 0) {
       speed *= 1.2;
       this.speedBuffTimer -= delta;
     }
-    
+
     const stamina = store.stamina;
     if (shift && stamina > 0) {
       speed *= SPRINT_MULTIPLIER;
@@ -184,50 +349,14 @@ export class MainScene extends Phaser.Scene {
       }
     }
 
-    // Low sanity effects
+    // Low sanity visual effects
     if (store.sanity < 30) {
-      this.cameras.main.setAlpha(0.9 + Math.sin(this.time.now / 200) * 0.1);
+      this.cameras.main.setAlpha(0.85 + Math.sin(this.time.now / 150) * 0.15);
     } else {
       this.cameras.main.setAlpha(1);
     }
 
     this.handleInteraction(delta);
-  }
-
-  private createBasementBackground() {
-    const { width, height } = this.scale;
-
-    // Dark floor
-    const floor = this.add.graphics();
-    floor.fillStyle(0x1a1410, 1);
-    floor.fillRect(0, 0, width, height);
-
-    // Brick wall pattern
-    const bricks = this.add.graphics();
-    bricks.lineStyle(1, 0x3a2618, 0.3);
-    
-    const brickW = 48;
-    const brickH = 24;
-    for (let y = 0; y < height; y += brickH) {
-      const offset = (Math.floor(y / brickH) % 2) * (brickW / 2);
-      for (let x = -brickW + offset; x < width + brickW; x += brickW) {
-        bricks.strokeRect(x, y, brickW, brickH);
-      }
-    }
-
-    // Floor grid overlay
-    const grid = this.add.graphics();
-    grid.lineStyle(1, 0x2a1f18, 0.4);
-    const step = 48;
-    for (let x = 0; x < width; x += step) {
-      grid.lineBetween(x, 0, x, height);
-    }
-    for (let y = 0; y < height; y += step) {
-      grid.lineBetween(0, y, width, y);
-    }
-
-    // Ambient dust effect using graphics instead of particles (avoids texture issues)
-    // We'll skip particles for now to avoid undefined texture errors
   }
 
   private resetScene() {
@@ -237,86 +366,14 @@ export class MainScene extends Phaser.Scene {
     this.holdTimer = 0;
     this.holdTarget = null;
     this.speedBuffTimer = 0;
-    this.player.setPosition(this.scale.width / 2, this.scale.height / 2);
+    this.player.setPosition(LEVEL_WIDTH / 2, 1100);
     this.player.setVelocity(0, 0);
-    this.objects.forEach((obj) => obj.sprite.destroy());
-    this.objects = [];
-    this.spawnObjects();
-  }
-
-  private createWalls() {
-    const { width, height } = this.scale;
-    const thickness = 32;
-
-    // Draw visible walls
-    const wallGraphics = this.add.graphics();
-    wallGraphics.fillStyle(0x3a2618, 1);
-    wallGraphics.fillRect(0, 0, width, thickness); // Top
-    wallGraphics.fillRect(0, height - thickness, width, thickness); // Bottom
-    wallGraphics.fillRect(0, 0, thickness, height); // Left
-    wallGraphics.fillRect(width - thickness, 0, thickness, height); // Right
-
-    // Darker border lines
-    wallGraphics.lineStyle(2, 0x1a1410, 1);
-    wallGraphics.strokeRect(thickness, thickness, width - thickness * 2, height - thickness * 2);
-
-    // Use world bounds for collision instead of static group
-    // Player already has setCollideWorldBounds(true)
-    // Adjust world bounds to account for wall thickness
-    this.physics.world.setBounds(
-      thickness,
-      thickness,
-      width - thickness * 2,
-      height - thickness * 2
-    );
-  }
-
-  private spawnObjects() {
-    const coords = [
-      { x: 120, y: 120, type: "computer" as const },
-      { x: 220, y: 380, type: "trash" as const },
-      { x: 450, y: 160, type: "trash" as const },
-      { x: 780, y: 120, type: "server" as const },
-      { x: 600, y: 420, type: "coffee" as const },
-    ];
-
-    coords.forEach(({ x, y, type }) => {
-      const sprite = this.add
-        .rectangle(x, y, 40, type === "server" ? 80 : 40, this.colorFor(type))
-        .setStrokeStyle(2, 0x1a1410)
-        .setDepth(1);
-      
-      // Add icon/label
-      const label = this.add
-        .text(x, y, this.iconFor(type), {
-          fontFamily: "monospace",
-          fontSize: type === "server" ? "24px" : "16px",
-          color: "#fff",
-        })
-        .setOrigin(0.5)
-        .setDepth(2);
-
-      this.physics.add.existing(sprite, true);
-      this.objects.push({ sprite, type, active: true });
+    
+    // Reset all objects
+    this.objects.forEach((obj) => {
+      obj.active = true;
+      obj.sprite.setVisible(true);
     });
-  }
-
-  private colorFor(type: "trash" | "computer" | "server" | "coffee") {
-    switch (type) {
-      case "trash": return 0x553322;
-      case "computer": return 0x334455;
-      case "server": return 0x222222;
-      case "coffee": return 0x6f4e37;
-    }
-  }
-
-  private iconFor(type: "trash" | "computer" | "server" | "coffee") {
-    switch (type) {
-      case "trash": return "🗑";
-      case "computer": return "💻";
-      case "server": return "🖥";
-      case "coffee": return "☕";
-    }
   }
 
   private handleInteraction(delta: number) {
@@ -325,32 +382,16 @@ export class MainScene extends Phaser.Scene {
     const playerPos = new Phaser.Math.Vector2(this.player.x, this.player.y);
 
     // Find nearest active object
-    let nearest: (typeof this.objects)[number] | null = null;
-    let nearestDist = Number.MAX_VALUE;
-    
-    this.objects.forEach((obj) => {
-      if (!obj.active) return;
-      const dist = Phaser.Math.Distance.Between(
-        playerPos.x, playerPos.y,
-        obj.sprite.x, obj.sprite.y
-      );
-      if (dist < INTERACT_RADIUS && dist < nearestDist) {
-        nearest = obj;
-        nearestDist = dist;
-      }
-    });
+    const target = this.objects
+      .filter((obj) => obj.active)
+      .map((obj) => ({
+        obj,
+        dist: Phaser.Math.Distance.Between(playerPos.x, playerPos.y, obj.sprite.x, obj.sprite.y),
+      }))
+      .filter((item) => item.dist < INTERACT_RADIUS)
+      .sort((a, b) => a.dist - b.dist)[0]?.obj ?? null;
 
-    // Update interaction prompt
-    if (nearest) {
-      this.interactPrompt.setPosition(nearest.sprite.x, nearest.sprite.y - 50);
-      this.interactPrompt.setVisible(true);
-      
-      if (nearest.type === "server" && store.mission === "Boot up the main server") {
-        this.interactPrompt.setText("[E] Hold to Boot");
-      } else {
-        this.interactPrompt.setText("[E] Interact");
-      }
-    } else {
+    if (!target) {
       this.interactPrompt.setVisible(false);
       this.holdProgressBar.clear();
       this.holdTarget = null;
@@ -358,37 +399,53 @@ export class MainScene extends Phaser.Scene {
       return;
     }
 
+    // Position prompt above target
+    this.interactPrompt.setPosition(target.sprite.x, target.sprite.y - 35);
+    this.interactPrompt.setVisible(true);
+
+    // Update prompt text based on object type
+    if (target.type === "server" && store.mission === "Boot up the main server") {
+      this.interactPrompt.setText("[E] Hold to Boot");
+    } else if (target.type === "nelly") {
+      this.interactPrompt.setText("[E] Pet Nelly");
+    } else if (target.type === "coffee") {
+      this.interactPrompt.setText("[E] Drink Coffee");
+    } else if (target.type === "trash") {
+      this.interactPrompt.setText("[E] Clean Up");
+    } else if (target.type === "computer") {
+      this.interactPrompt.setText("[E] Fix Bug");
+    } else {
+      this.interactPrompt.setText("[E] Interact");
+    }
+
     const isHolding = this.interactKey.isDown;
 
     // Server requires hold
-    if (nearest.type === "server") {
+    if (target.type === "server") {
       if (isHolding && store.mission === "Boot up the main server") {
-        if (this.holdTarget !== nearest.sprite) {
-          this.holdTarget = nearest.sprite;
+        if (this.holdTarget !== target.sprite) {
+          this.holdTarget = target.sprite;
           this.holdTimer = 0;
         }
         this.holdTimer += delta;
-        
+
         // Draw progress bar
         const progress = Math.min(this.holdTimer / SERVER_HOLD_MS, 1);
         this.holdProgressBar.clear();
-        this.holdProgressBar.fillStyle(0x1a1410, 0.8);
-        this.holdProgressBar.fillRect(nearest.sprite.x - 30, nearest.sprite.y - 65, 60, 8);
+        this.holdProgressBar.fillStyle(0x1a1410, 0.9);
+        this.holdProgressBar.fillRect(target.sprite.x - 30, target.sprite.y - 50, 60, 10);
         this.holdProgressBar.fillStyle(0x66fcf1, 1);
-        this.holdProgressBar.fillRect(nearest.sprite.x - 28, nearest.sprite.y - 63, 56 * progress, 4);
+        this.holdProgressBar.fillRect(target.sprite.x - 28, target.sprite.y - 48, 56 * progress, 6);
 
         if (this.holdTimer >= SERVER_HOLD_MS) {
-          nearest.active = false;
-          (nearest.sprite as Phaser.GameObjects.Rectangle).setFillStyle(0x00aa00);
+          target.active = false;
           store.addScore(500);
           store.setMission("Clean up the remaining mess");
-          store.setMessage("SERVER ONLINE!");
+          store.setMessage("🖥️ SERVER ONLINE!");
           this.time.delayedCall(2000, () => store.setMessage(null));
           this.holdTimer = 0;
           this.holdTarget = null;
           this.holdProgressBar.clear();
-          
-          // Particle burst
           this.cameras.main.flash(200, 102, 252, 241, false);
         }
       } else {
@@ -401,25 +458,22 @@ export class MainScene extends Phaser.Scene {
 
     // Instant interactions
     if (Phaser.Input.Keyboard.JustDown(this.interactKey)) {
-      this.doInteraction(nearest);
+      this.doInteraction(target);
     }
   }
 
-  private doInteraction(obj: (typeof this.objects)[number]) {
+  private doInteraction(obj: InteractableObject) {
     const store = useGameStore.getState();
 
-    // Visual feedback - flash effect instead of particles
-    this.cameras.main.flash(100, 102, 252, 241, false, (_: unknown, progress: number) => {
-      if (progress === 1) return;
-    });
+    // Visual feedback
+    this.cameras.main.flash(80, 102, 252, 241, false);
 
     switch (obj.type) {
       case "trash":
         obj.active = false;
-        obj.sprite.setVisible(false);
         store.adjustSanity(+10);
         store.addScore(50);
-        store.setMessage("Cleaned Trash (+10 Sanity)");
+        store.setMessage("🗑️ Cleaned up! (+10 Sanity)");
         this.time.delayedCall(1500, () => store.setMessage(null));
         this.checkWinCondition();
         break;
@@ -427,34 +481,47 @@ export class MainScene extends Phaser.Scene {
       case "computer":
         store.adjustSanity(-5);
         store.addScore(20);
-        store.setMessage("Fixed Bug (-5 Sanity)");
+        store.setMessage("💻 Fixed Bug (-5 Sanity)");
         this.cameras.main.shake(100, 0.002);
         this.time.delayedCall(1500, () => store.setMessage(null));
         break;
 
       case "coffee":
         obj.active = false;
-        (obj.sprite as Phaser.GameObjects.Rectangle).setFillStyle(0x2ecc71);
         store.adjustSanity(+25);
         store.adjustStamina(+1000);
         this.speedBuffTimer = COFFEE_BUFF_MS;
         store.setMessage("☕ Energy Restored!");
         this.time.delayedCall(1500, () => store.setMessage(null));
-        
         // Respawn coffee
-        this.time.delayedCall(10000, () => {
+        this.time.delayedCall(12000, () => {
           obj.active = true;
-          obj.sprite.setVisible(true);
-          (obj.sprite as Phaser.GameObjects.Rectangle).setFillStyle(0x6f4e37);
         });
+        break;
+
+      case "nelly":
+        // Petting the dog always helps!
+        store.adjustSanity(+15);
+        store.addScore(25);
+        store.setMessage("🐕 Good girl, Nelly! (+15 Sanity)");
+        this.time.delayedCall(1500, () => store.setMessage(null));
+        // Can pet again after cooldown
+        obj.active = false;
+        this.time.delayedCall(5000, () => {
+          obj.active = true;
+        });
+        break;
+
+      case "server":
+        // Handled in hold interaction
         break;
     }
   }
 
   private checkWinCondition() {
     const store = useGameStore.getState();
-    const trashLeft = this.objects.filter(o => o.type === "trash" && o.active).length;
-    
+    const trashLeft = this.objects.filter((o) => o.type === "trash" && o.active).length;
+
     if (trashLeft === 0 && store.mission === "Clean up the remaining mess") {
       store.setMission("Mission Complete!");
       store.setGameState("won");
