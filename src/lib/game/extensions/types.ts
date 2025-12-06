@@ -44,6 +44,8 @@ export const ExtensionNames = {
   speedBuff: "speedBuff",
   cooldown: "cooldown",
   animatable: "animatable",
+  occludable: "occludable",
+  controllable: "controllable",
 } as const;
 
 export type ExtensionName = (typeof ExtensionNames)[keyof typeof ExtensionNames];

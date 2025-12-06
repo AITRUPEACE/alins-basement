@@ -1,0 +1,50 @@
+{ "frames": {
+   "Gemini_Generated_Image_h249ddh249ddh249 0.png": {
+    "frame": { "x": 0, "y": 0, "w": 1072, "h": 992 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 1072, "h": 992 },
+    "sourceSize": { "w": 1072, "h": 992 },
+    "duration": 100
+   },
+   "Gemini_Generated_Image_h249ddh249ddh249 1.png": {
+    "frame": { "x": 1072, "y": 0, "w": 1072, "h": 992 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 1072, "h": 992 },
+    "sourceSize": { "w": 1072, "h": 992 },
+    "duration": 100
+   },
+   "Gemini_Generated_Image_h249ddh249ddh249 2.png": {
+    "frame": { "x": 2144, "y": 0, "w": 1072, "h": 992 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 1072, "h": 992 },
+    "sourceSize": { "w": 1072, "h": 992 },
+    "duration": 100
+   },
+   "Gemini_Generated_Image_h249ddh249ddh249 3.png": {
+    "frame": { "x": 3216, "y": 0, "w": 1072, "h": 992 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 1072, "h": 992 },
+    "sourceSize": { "w": 1072, "h": 992 },
+    "duration": 100
+   }
+ },
+ "meta": {
+  "app": "https://www.aseprite.org/",
+  "version": "1.3.15.5-x64",
+  "image": "spritesheet-nelly-sprintingt.png",
+  "format": "RGBA8888",
+  "size": { "w": 4288, "h": 992 },
+  "scale": "1",
+  "frameTags": [
+  ],
+  "layers": [
+   { "name": "Sprite Sheet", "opacity": 255, "blendMode": "normal" }
+  ],
+  "slices": [
+  ]
+ }
+}

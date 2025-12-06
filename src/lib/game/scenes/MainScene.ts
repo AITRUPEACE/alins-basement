@@ -3,7 +3,11 @@ import { useGameStore } from "@/lib/state/gameStore";
 import { EntityFactory, EntityTypes, type EntitySpawnConfig } from "../entities";
 import { Coffee } from "../entities/Coffee";
 import { Trash } from "../entities/Trash";
+import { Nelly } from "../entities/Nelly";
+import { Furniture } from "../entities/Furniture";
+import { Lamp } from "../entities/Lamp";
 import { InteractionSystem, CollisionEditorSystem, type CollisionBoxData } from "../systems";
+import { updatePlayerDepth } from "../extensions";
 
 // Debug settings interface (set from React DebugPanel)
 interface DebugSettings {
@@ -35,17 +39,27 @@ const COFFEE_BUFF_MS = 5000;
 const LEVEL_WIDTH = 2976;
 const LEVEL_HEIGHT = 1440;
 
+/** Who is currently being controlled */
+type ControlledCharacter = "alin" | "nelly";
+
 /**
  * MainScene - refactored to use ECS-inspired architecture
- * Much cleaner separation of concerns with entities, extensions, and systems
+ * Now supports switching between Alin and Nelly!
  */
 export class MainScene extends Phaser.Scene {
-  // Player
+  // Player (Alin)
   private player!: Phaser.Physics.Arcade.Sprite;
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys & {
     shift?: Phaser.Input.Keyboard.Key;
   };
   private interactKey!: Phaser.Input.Keyboard.Key;
+  private switchKey!: Phaser.Input.Keyboard.Key;
+
+  // Nelly reference (for easy access)
+  private nelly: Nelly | null = null;
+  
+  // Who is currently controlled
+  private controlledCharacter: ControlledCharacter = "alin";
 
   // Systems
   private entityFactory!: EntityFactory;
@@ -72,6 +86,15 @@ export class MainScene extends Phaser.Scene {
       "/assets/aseprite/spritesheets/alin_sprite_full-Photoroom-sheet.png",
       "/assets/aseprite/spritesheets/alin_sprite_full-Photoroom.json"
     );
+    
+    // Load Nelly spritesheet
+    Nelly.preload(this);
+    
+    // Load furniture sprites
+    Furniture.preload(this);
+    
+    // Load lamp sprite (interactive lamp with glow)
+    Lamp.preload(this);
   }
 
   create() {
@@ -98,7 +121,10 @@ export class MainScene extends Phaser.Scene {
     this.walls = this.physics.add.staticGroup();
     this.createInitialCollisionBoxes();
 
-    // Create player
+    // Create Nelly's animations
+    Nelly.createAnimations(this);
+
+    // Create player (Alin)
     this.createPlayer();
     this.physics.add.collider(this.player, this.walls);
 
@@ -111,6 +137,7 @@ export class MainScene extends Phaser.Scene {
       shift: Phaser.Input.Keyboard.KeyCodes.SHIFT,
     }) as typeof this.cursors;
     this.interactKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.E);
+    this.switchKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.TAB);
 
     // Initialize entity factory and spawn game objects
     this.entityFactory = new EntityFactory(this);
@@ -120,7 +147,7 @@ export class MainScene extends Phaser.Scene {
     this.interactionSystem = new InteractionSystem(
       this,
       () => this.entityFactory.getAll(),
-      () => (this.player ? { x: this.player.x, y: this.player.y } : null)
+      () => this.getActiveCharacterPosition()
     );
 
     // Initialize collision editor
@@ -134,7 +161,54 @@ export class MainScene extends Phaser.Scene {
       }
     );
 
+    // Start following Alin
+    this.cameras.main.startFollow(this.player, true, 0.08, 0.08);
+    this.cameras.main.setDeadzone(100, 50);
+
     this.lastPhase = store.gameState;
+  }
+
+  /**
+   * Get the position of the currently active character
+   */
+  private getActiveCharacterPosition(): { x: number; y: number } | null {
+    if (this.controlledCharacter === "nelly" && this.nelly) {
+      return { x: this.nelly.x, y: this.nelly.y };
+    }
+    return this.player ? { x: this.player.x, y: this.player.y } : null;
+  }
+
+  /**
+   * Switch control between Alin and Nelly
+   */
+  private switchCharacter(): void {
+    if (!this.nelly) return;
+
+    if (this.controlledCharacter === "alin") {
+      // Switch to Nelly
+      this.controlledCharacter = "nelly";
+      this.nelly.takeControl();
+      this.player.setVelocity(0, 0);
+      if (this.anims.exists("idle")) {
+        this.player.play("idle");
+      }
+      
+      // Camera follows Nelly
+      this.cameras.main.startFollow(this.nelly.nellySprite, true, 0.08, 0.08);
+      
+      // Visual indicator on Alin (slight transparency)
+      this.player.setAlpha(0.7);
+    } else {
+      // Switch to Alin
+      this.controlledCharacter = "alin";
+      this.nelly.releaseControl();
+      
+      // Camera follows Alin
+      this.cameras.main.startFollow(this.player, true, 0.08, 0.08);
+      
+      // Restore Alin's opacity
+      this.player.setAlpha(1);
+    }
   }
 
   private createPlayer() {
@@ -186,8 +260,6 @@ export class MainScene extends Phaser.Scene {
 
     this.player.setCollideWorldBounds(true);
     this.player.body?.setSize(100, 180);
-    this.cameras.main.startFollow(this.player, true, 0.08, 0.08);
-    this.cameras.main.setDeadzone(100, 50);
   }
 
   private createInitialCollisionBoxes() {
@@ -228,22 +300,34 @@ export class MainScene extends Phaser.Scene {
   private spawnLevelEntities() {
     // Define level objects using the new entity system
     const levelObjects: EntitySpawnConfig[] = [
-      // Server rack
+      // Server rack (interactable)
       { type: EntityTypes.server, x: 160, y: 310, width: 80, height: 50 },
       
-      // Computer
+      // Computer (interactable)
       { type: EntityTypes.computer, x: 780, y: 320, width: 80, height: 50 },
       
-      // Nelly the dog
-      { type: EntityTypes.nelly, x: 520, y: 400, width: 50, height: 40 },
+      // Nelly the dog (interactable AND controllable!)
+      { type: EntityTypes.nelly, x: 1400, y: 1000, width: 100, height: 80 },
       
-      // Trash
+      // Trash (interactable, cleanable)
       { type: EntityTypes.trash, x: 150, y: 420, width: 30, height: 30 },
       { type: EntityTypes.trash, x: 350, y: 380, width: 30, height: 30 },
       { type: EntityTypes.trash, x: 880, y: 400, width: 30, height: 30 },
       
-      // Coffee
+      // Coffee (interactable, respawns)
       { type: EntityTypes.coffee, x: 620, y: 390, width: 25, height: 25 },
+      
+      // ===== OCCLUDABLE FURNITURE =====
+      { type: EntityTypes.furniture, x: 1800, y: 900, furnitureType: "shelf", width: 150, height: 200 },
+      { type: EntityTypes.furniture, x: 2100, y: 850, furnitureType: "shelf", width: 120, height: 180 },
+      { type: EntityTypes.furniture, x: 400, y: 800, furnitureType: "serverRack", width: 100, height: 220 },
+      { type: EntityTypes.furniture, x: 1500, y: 1000, furnitureType: "crate", width: 70, height: 70 },
+      { type: EntityTypes.furniture, x: 1600, y: 950, furnitureType: "crate", width: 60, height: 60 },
+      { type: EntityTypes.furniture, x: 2400, y: 900, furnitureType: "desk", width: 180, height: 90 },
+      
+      // ===== INTERACTIVE LAMP (with glow effect!) =====
+      // Player can walk behind this and toggle it on/off
+      { type: EntityTypes.lamp, x: 1300, y: 1050, scale: 0.4 },
     ];
 
     const entities = this.entityFactory.createMany(levelObjects);
@@ -256,6 +340,22 @@ export class MainScene extends Phaser.Scene {
           this.speedBuffTimer = duration;
         };
       });
+
+    // Get Nelly reference and set up control switching
+    const nellyEntities = entities.filter((e): e is Nelly => e instanceof Nelly);
+    if (nellyEntities.length > 0) {
+      this.nelly = nellyEntities[0];
+      
+      // Set up collision for Nelly
+      this.nelly.setCollisionWith(this.walls);
+      
+      // Set up control change callback
+      this.nelly.onControlChange = (isControlled) => {
+        if (isControlled && this.controlledCharacter !== "nelly") {
+          this.switchCharacter();
+        }
+      };
+    }
   }
 
   update(_: number, delta: number) {
@@ -275,6 +375,7 @@ export class MainScene extends Phaser.Scene {
     if (store.gameState !== "playing") {
       if (this.lastPhase === "playing") {
         this.player?.setVelocity(0, 0);
+        this.nelly?.releaseControl();
       }
       this.lastPhase = store.gameState;
       this.player?.setVelocity(0, 0);
@@ -287,11 +388,27 @@ export class MainScene extends Phaser.Scene {
     }
     this.lastPhase = store.gameState;
 
+    // Check for character switch (TAB key)
+    if (Phaser.Input.Keyboard.JustDown(this.switchKey) && this.nelly) {
+      this.switchCharacter();
+    }
+
     // Update all entities
     this.entityFactory.update(delta);
 
-    // Movement
-    this.handleMovement(delta, debug);
+    // Handle movement based on who is controlled
+    if (this.controlledCharacter === "alin") {
+      this.handleAlinMovement(delta, debug);
+      updatePlayerDepth(this.player);
+    } else if (this.nelly) {
+      this.handleNellyMovement();
+      this.nelly.updateDepth();
+    }
+
+    // Always update Alin's depth for occlusion (even when not controlled)
+    if (this.controlledCharacter !== "alin") {
+      updatePlayerDepth(this.player);
+    }
 
     // Sanity drain
     this.handleSanityDrain(delta, store);
@@ -299,18 +416,20 @@ export class MainScene extends Phaser.Scene {
     // Low sanity visual effects
     this.handleLowSanityEffects(store);
 
-    // Interaction system update
-    this.interactionSystem.update(
-      delta,
-      this.interactKey.isDown,
-      Phaser.Input.Keyboard.JustDown(this.interactKey)
-    );
+    // Interaction system update (only when controlling Alin)
+    if (this.controlledCharacter === "alin") {
+      this.interactionSystem.update(
+        delta,
+        this.interactKey.isDown,
+        Phaser.Input.Keyboard.JustDown(this.interactKey)
+      );
+    }
 
     // Check win condition
     this.checkWinCondition();
   }
 
-  private handleMovement(delta: number, debug?: DebugSettings) {
+  private handleAlinMovement(delta: number, debug?: DebugSettings) {
     const store = useGameStore.getState();
     
     const left = this.cursors.left?.isDown;
@@ -370,6 +489,18 @@ export class MainScene extends Phaser.Scene {
     }
   }
 
+  private handleNellyMovement() {
+    if (!this.nelly) return;
+    
+    const left = this.cursors.left?.isDown ?? false;
+    const right = this.cursors.right?.isDown ?? false;
+    const up = this.cursors.up?.isDown ?? false;
+    const down = this.cursors.down?.isDown ?? false;
+    const sprint = this.cursors.shift?.isDown ?? false;
+    
+    this.nelly.handleInput(left, right, up, down, sprint);
+  }
+
   private handleSanityDrain(delta: number, store: ReturnType<typeof useGameStore.getState>) {
     this.sanityTimer += delta;
     if (this.sanityTimer >= SANITY_DRAIN_INTERVAL_MS) {
@@ -398,6 +529,7 @@ export class MainScene extends Phaser.Scene {
       store.setMission("Mission Complete!");
       store.setGameState("won");
       this.player.setVelocity(0, 0);
+      this.nelly?.releaseControl();
       this.cameras.main.flash(500, 46, 204, 113, false);
     }
   }
@@ -407,8 +539,20 @@ export class MainScene extends Phaser.Scene {
     store.reset();
     this.sanityTimer = 0;
     this.speedBuffTimer = 0;
+    this.controlledCharacter = "alin";
+    
     this.player.setPosition(LEVEL_WIDTH / 2, 1100);
     this.player.setVelocity(0, 0);
+    this.player.setAlpha(1);
+    
+    // Reset Nelly
+    if (this.nelly) {
+      this.nelly.releaseControl();
+      this.nelly.nellySprite.setPosition(1400, 1000);
+    }
+    
+    // Camera follows Alin
+    this.cameras.main.startFollow(this.player, true, 0.08, 0.08);
 
     // Reset all entities
     this.entityFactory.getAll().forEach((entity) => {

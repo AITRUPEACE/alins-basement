@@ -5,6 +5,8 @@ import { Coffee } from "./Coffee";
 import { Computer } from "./Computer";
 import { Server } from "./Server";
 import { Nelly } from "./Nelly";
+import { Furniture, type FurnitureType } from "./Furniture";
+import { Lamp } from "./Lamp";
 
 /**
  * Entity types that can be created by the factory
@@ -15,6 +17,8 @@ export const EntityTypes = {
   computer: "computer",
   server: "server",
   nelly: "nelly",
+  furniture: "furniture",
+  lamp: "lamp",
 } as const;
 
 export type EntityType = (typeof EntityTypes)[keyof typeof EntityTypes];
@@ -29,6 +33,14 @@ export interface EntitySpawnConfig {
   width?: number;
   height?: number;
   id?: string;
+  /** Furniture-specific config */
+  furnitureType?: FurnitureType;
+  /** Color tint for furniture */
+  color?: number;
+  /** Y offset for depth sorting */
+  sortYOffset?: number;
+  /** Scale for sprites (lamp, etc.) */
+  scale?: number;
 }
 
 /**
@@ -47,7 +59,7 @@ export class EntityFactory {
    * Create an entity from configuration
    */
   create(config: EntitySpawnConfig): Entity {
-    const { type, x, y, width, height, id } = config;
+    const { type, x, y, width, height, id, furnitureType, color, sortYOffset, scale } = config;
     
     let entity: Entity;
     
@@ -66,6 +78,18 @@ export class EntityFactory {
         break;
       case EntityTypes.nelly:
         entity = new Nelly(this.scene, x, y, width, height);
+        break;
+      case EntityTypes.furniture:
+        entity = new Furniture(this.scene, x, y, {
+          type: furnitureType ?? "crate",
+          width,
+          height,
+          color,
+          sortYOffset,
+        });
+        break;
+      case EntityTypes.lamp:
+        entity = new Lamp(this.scene, x, y, scale ?? 0.5);
         break;
       default:
         throw new Error(`Unknown entity type: ${type}`);
