@@ -4,6 +4,8 @@ import dynamic from "next/dynamic";
 import { HudPanel } from "./HudPanel";
 import { Overlays } from "./Overlays";
 import { DebugPanel } from "./DebugPanel";
+import { CollisionEditor } from "./CollisionEditor";
+import { HighScores } from "./HighScores";
 
 // Dynamically import GameCanvas with SSR disabled to avoid "window is not defined"
 const GameCanvas = dynamic(() => import("./GameCanvas"), {
@@ -48,6 +50,8 @@ export default function GamePage() {
 					<GameCanvas />
 					<Overlays />
 					<DebugPanel />
+					<CollisionEditor />
+					<HighScores />
 				</div>
 
 				{/* HUD */}

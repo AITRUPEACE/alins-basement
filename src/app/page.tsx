@@ -11,7 +11,7 @@ export default function Home() {
 	useEffect(() => {
 		const interval = setInterval(() => {
 			setFrame((f) => (f === 1 ? 2 : 1));
-		}, 2000); // Toggle every 500ms for a nice animation effect
+		}, 2000); // Toggle every 2 seconds for a nice animation effect
 		return () => clearInterval(interval);
 	}, []);
 

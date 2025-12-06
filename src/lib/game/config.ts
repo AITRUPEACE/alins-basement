@@ -29,7 +29,7 @@ export const createGameConfig = (
     physics: {
       default: "arcade",
       arcade: {
-        debug: false,
+        debug: true, // Enable to see physics bodies
       },
     },
     scene: [MainScene],
